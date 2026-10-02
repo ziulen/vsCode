@@ -33,7 +33,7 @@ const int ENCODER_A = 32;
 const int ENCODER_B = 33;
 
 // ADC voltaje FAN
-//const int PIN_VOLTAJE = 34;
+const int PIN_VOLTAJE = 34;
 
 // Relé botón ON/OFF
 const int RELE_POWER = 26;
@@ -41,8 +41,8 @@ const int RELE_POWER = 26;
 // DIVISOR DE VOLTAJE
 // =====================================================
 
-//const float R1 = 20000.0;   // FAN+ -> GPIO34
-//const float R2 = 10000.0;   // GPIO34 -> GND
+const float R1 = 20000.0;   // FAN+ -> GPIO34
+const float R2 = 10000.0;   // GPIO34 -> GND
 
 
 // =====================================================
@@ -58,9 +58,9 @@ int contadorDownWPF = 0;
 // TEMPORIZADOR PARA VOLTAJE/RPM
 // =====================================================
 
-//unsigned long ultimoEnvioVoltaje = 0;
+unsigned long ultimoEnvioVoltaje = 0;
 
-//const unsigned long INTERVALO_VOLTAJE = 500;
+const unsigned long INTERVALO_VOLTAJE = 500;
 
 
 // =====================================================
@@ -145,15 +145,11 @@ void leerEncoder()
 
     int estadoActual = (A << 1) | B;
 
-    // No cambió nada
+    // No hubo cambio
     if (estadoActual == estadoAnterior)
         return;
 
-
-    // =====================================================
-    // TABLA DE CUADRATURA
-    // =====================================================
-
+    // Tabla de cuadratura
     static const int8_t tabla[16] =
     {
          0, -1,  1,  0,
@@ -162,113 +158,94 @@ void leerEncoder()
          0,  1, -1,  0
     };
 
-
     int indice =
         (estadoAnterior << 2) | estadoActual;
 
     int movimiento =
         tabla[indice];
 
-    estadoAnterior =
-        estadoActual;
+    estadoAnterior = estadoActual;
 
-
-    // =====================================================
-    // MOSTRAR ESTADO
-    // =====================================================
-
-    Serial.print("ENC:");
-    Serial.print(A);
-    Serial.print(",");
-    Serial.println(B);
-
-
-    // Ignorar transición inválida
+    // Transición inválida
     if (movimiento == 0)
         return;
 
-
+    // Acumular cuadratura
     acumulador += movimiento;
 
-
-    // =====================================================
-    // SOLO CONTAR CUANDO TERMINA EL CLIC
+    // ==========================================
+    // CICLO COMPLETO SENTIDO POSITIVO
     //
-    // Tu encoder descansa en:
+    // 11 -> 01 -> 00 -> 10 -> 11
+    // ==========================================
+
+    if (acumulador >= 4)
+    {
+        acumulador = 0;
+
+        Serial.println("ENCODER:UP");
+
+        // Reproducir exactamente el ciclo
+        // hacia la placa
+        subir();
+
+        return;
+    }
+
+    // ==========================================
+    // CICLO COMPLETO SENTIDO NEGATIVO
     //
-    // A = 1
-    // B = 1
-    //
-    // Es decir: estado 3 (11)
-    // =====================================================
+    // 11 -> 10 -> 00 -> 01 -> 11
+    // ==========================================
 
-    if (estadoActual != 3)
-    return;
+    if (acumulador <= -4)
+    {
+        acumulador = 0;
 
+        Serial.println("ENCODER:DOWN");
 
-// =====================================================
-// UN CLIC DERECHA
-// =====================================================
+        // Reproducir exactamente el ciclo
+        // contrario hacia la placa
+        bajar();
 
-if (acumulador > 0)
-{
-    // Mostrar cuánto acumuló realmente este clic
-    Serial.print("CLICK UP - ACUMULADOR:");
-    Serial.println(acumulador);
+        return;
+    }
 
-    acumulador = 0;
-
-    subir();
-
-    Serial.println("ENCODER:UP");
-
-    return;
-}
-
-
-// =====================================================
-// UN CLIC IZQUIERDA
-// =====================================================
-
-if (acumulador < 0)
-{
-    // Mostrar cuánto acumuló realmente este clic
-    Serial.print("CLICK DOWN - ACUMULADOR:");
-    Serial.println(acumulador);
-
-    acumulador = 0;
-
-    bajar();
-
-    Serial.println("ENCODER:DOWN");
-
-    return;
-}
-
-
-acumulador = 0;
+    // Protección por ruido extraño
+    if (acumulador > 8 || acumulador < -8)
+    {
+        acumulador = 0;
+    }
 }
 // =====================================================
 // LEER ADC RAW GPIO34
 // =====================================================
+uint32_t leerMilivoltiosFan()
+{
+    const int MUESTRAS = 64;
+    uint32_t suma = 0;
 
-//int leerRawFan()
-//{
-//    return analogRead(PIN_VOLTAJE);
-//}
+    for (int i = 0; i < MUESTRAS; i++)
+    {
+        suma += analogReadMilliVolts(PIN_VOLTAJE);
+
+        // Pequeña separación entre muestras
+        delayMicroseconds(500);
+    }
+
+    return suma / MUESTRAS;
+}
 
 // =====================================================
 // ENVIAR ADC RAW
 // =====================================================
+void enviarDatosFan()
+{
+    uint32_t milivoltios = leerMilivoltiosFan();
 
-//void enviarDatosFan()
-//{
-//    int raw = leerRawFan();
-
-//    Serial.print("RAW:");
-//    Serial.println(raw);
-//}
-
+    Serial.print("MV:");
+    Serial.println(milivoltios);
+}
 
 // =====================================================
 // BOTÓN POWER - RELÉ
@@ -449,9 +426,9 @@ digitalWrite(RELE_POWER, HIGH);
     // ADC
     // =================================================
 
-    //pinMode(PIN_VOLTAJE, INPUT);
+    pinMode(PIN_VOLTAJE, INPUT);
 
-    //analogReadResolution(12);
+    analogReadResolution(12);
 
 
     delay(500);
@@ -476,7 +453,7 @@ digitalWrite(RELE_POWER, HIGH);
 
     enviarEstadoEncoder();
 
-    //enviarDatosFan();
+    enviarDatosFan();
 }
 
 
@@ -506,13 +483,13 @@ void loop()
     // Enviar cada 500 ms
     // =================================================
 
-    //unsigned long ahora = millis();
+    unsigned long ahora = millis();
 
 
-    //if (ahora - ultimoEnvioVoltaje >= INTERVALO_VOLTAJE)
-    //{
-    //    ultimoEnvioVoltaje = ahora;
+    if (ahora - ultimoEnvioVoltaje >= INTERVALO_VOLTAJE)
+    {
+       ultimoEnvioVoltaje = ahora;
 
-        //enviarDatosFan();
-    //}
+        enviarDatosFan();
+    }
 }
