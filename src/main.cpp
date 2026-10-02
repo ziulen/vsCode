@@ -1,4 +1,6 @@
 #include <Arduino.h>
+#include <Preferences.h>
+Preferences preferencias;
 // =====================================================
 // CONTROL COMPLETO DEL COOLER - ESP32
 //
@@ -44,7 +46,27 @@ const int RELE_POWER = 26;
 const float R1 = 20000.0;   // FAN+ -> GPIO34
 const float R2 = 10000.0;   // GPIO34 -> GND
 
+// =====================================================
+// LABORATORIO DE CUADRATURA
+// =====================================================
 
+const int MAX_ESTADOS_Q = 10;
+
+int tiempoCuadratura = 10;
+int ciclosCuadratura = 1;
+
+uint8_t secuenciaCuadratura[MAX_ESTADOS_Q][2];
+
+int cantidadEstadosQ = 5;
+// =====================================================
+// PROTOTIPOS
+// =====================================================
+
+void ejecutarCuadratura(bool invertir);
+void estadoLaboratorio(bool a, bool b);
+bool cargarSecuenciaCuadratura(String texto);
+void guardarConfiguracionCuadratura();
+bool cargarConfiguracionGuardada();
 // =====================================================
 // ENCODER
 // =====================================================
@@ -53,7 +75,14 @@ int estadoAnterior = 0;
 int acumulador = 0;
 int contadorUpWPF = 0;
 int contadorDownWPF = 0;
+// =====================================================
+// PASO LÓGICO WPF
+// =====================================================
 
+const int PASO_MINIMO = 0;
+const int PASO_MAXIMO = 20;
+
+int pasoActual = 0;
 // =====================================================
 // TEMPORIZADOR PARA VOLTAJE/RPM
 // =====================================================
@@ -61,36 +90,118 @@ int contadorDownWPF = 0;
 unsigned long ultimoEnvioVoltaje = 0;
 
 const unsigned long INTERVALO_VOLTAJE = 500;
+void guardarConfiguracionCuadratura()
+{
+    preferencias.begin("cuadratura", false);
+
+    preferencias.putInt(
+        "tiempo",
+        tiempoCuadratura);
+
+    preferencias.putInt(
+        "ciclos",
+        ciclosCuadratura);
+
+    preferencias.putInt(
+        "cantidad",
+        cantidadEstadosQ);
+
+    preferencias.putBytes(
+        "secuencia",
+        secuenciaCuadratura,
+        sizeof(secuenciaCuadratura));
+
+    preferencias.end();
+
+    Serial.println("QSAVE_OK");
+}bool cargarConfiguracionGuardada()
+{
+    preferencias.begin("cuadratura", true);
+
+    bool existe =
+        preferencias.isKey("tiempo") &&
+        preferencias.isKey("ciclos") &&
+        preferencias.isKey("cantidad") &&
+        preferencias.isKey("secuencia");
+
+    if (!existe)
+    {
+        preferencias.end();
+        return false;
+    }
+
+    int tiempo =
+        preferencias.getInt("tiempo", 10);
+
+    int ciclos =
+        preferencias.getInt("ciclos", 1);
+
+    int cantidad =
+        preferencias.getInt("cantidad", 5);
 
 
+    // Validación básica
+    if (tiempo < 1 ||
+        tiempo > 1000 ||
+        ciclos < 1 ||
+        ciclos > 20 ||
+        cantidad < 2 ||
+        cantidad > MAX_ESTADOS_Q)
+    {
+        preferencias.end();
+        return false;
+    }
+
+
+    uint8_t temporal[MAX_ESTADOS_Q][2] = {};
+
+    size_t bytes =
+        preferencias.getBytes(
+            "secuencia",
+            temporal,
+            sizeof(temporal));
+
+    preferencias.end();
+
+
+    if (bytes != sizeof(temporal))
+    {
+        return false;
+    }
+
+
+    tiempoCuadratura = tiempo;
+    ciclosCuadratura = ciclos;
+    cantidadEstadosQ = cantidad;
+
+    memcpy(
+        secuenciaCuadratura,
+        temporal,
+        sizeof(secuenciaCuadratura));
+
+
+    Serial.println("QLOAD_OK");
+
+    return true;
+}
 // =====================================================
 // GENERAR ESTADO HACIA LA PLACA
 // =====================================================
 
 void estado(bool a, bool b)
 {
-    // =====================================================
-    // LOS TRANSISTORES 2N2222 INVIERTEN LA SEÑAL
-    //
-    // Queremos PAD = 1
-    //      ↓
-    // transistor OFF
-    //      ↓
-    // GPIO = LOW
-    //
-    // Queremos PAD = 0
-    //      ↓
-    // transistor ON
-    //      ↓
-    // GPIO = HIGH
-    // =====================================================
-
     digitalWrite(SALIDA_A, a ? HIGH : LOW);
     digitalWrite(SALIDA_B, b ? HIGH : LOW);
 
     delay(10);
 }
+void estadoLaboratorio(bool a, bool b)
+{
+    digitalWrite(SALIDA_A, a ? HIGH : LOW);
+    digitalWrite(SALIDA_B, b ? HIGH : LOW);
 
+    delay(tiempoCuadratura);
+}
 // =====================================================
 // SUBIR
 // =====================================================
@@ -246,7 +357,29 @@ void enviarDatosFan()
     Serial.print("MV:");
     Serial.println(milivoltios);
 }
+void mostrarPasoFan()
+{
+    uint32_t milivoltios =
+        leerMilivoltiosFan();
 
+    float voltajeGPIO =
+        milivoltios / 1000.0f;
+
+    // Divisor 20K / 10K
+    float voltajeFan =
+        voltajeGPIO * 3.0f;
+
+    Serial.print("PASO:");
+    Serial.print(pasoActual);
+
+    Serial.print(" | GPIO34:");
+    Serial.print(voltajeGPIO, 3);
+
+    Serial.print(" V | FAN:");
+    Serial.print(voltajeFan, 3);
+
+    Serial.println(" V");
+}
 // =====================================================
 // BOTÓN POWER - RELÉ
 // =====================================================
@@ -266,7 +399,89 @@ void pulsarPower()
 
     Serial.println("POWER:OFF");
 }
+bool cargarSecuenciaCuadratura(String texto)
+{
+    texto.trim();
 
+    int cantidad = 0;
+    int inicio = 0;
+
+    while (inicio < texto.length())
+    {
+        int coma =
+            texto.indexOf(',', inicio);
+
+        String estado;
+
+        if (coma == -1)
+        {
+            estado =
+                texto.substring(inicio);
+        }
+        else
+        {
+            estado =
+                texto.substring(
+                    inicio,
+                    coma);
+        }
+
+        estado.trim();
+
+
+        if (estado.length() != 2)
+        {
+            return false;
+        }
+
+
+        char a = estado.charAt(0);
+        char b = estado.charAt(1);
+
+
+        if ((a != '0' && a != '1') ||
+            (b != '0' && b != '1'))
+        {
+            return false;
+        }
+
+
+        if (cantidad >= MAX_ESTADOS_Q)
+        {
+            return false;
+        }
+
+
+        secuenciaCuadratura[cantidad][0] =
+            a - '0';
+
+        secuenciaCuadratura[cantidad][1] =
+            b - '0';
+
+
+        cantidad++;
+
+
+        if (coma == -1)
+        {
+            break;
+        }
+
+
+        inicio = coma + 1;
+    }
+
+
+    if (cantidad < 2)
+    {
+        return false;
+    }
+
+
+    cantidadEstadosQ = cantidad;
+
+    return true;
+}
 
 // =====================================================
 // PROCESAR COMANDO WPF
@@ -294,26 +509,28 @@ void procesarSerial()
     // =====================================================
 
     if (comando == "UP")
-    {
-        contadorUpWPF++;
-        contadorDownWPF = 0;
+{
+    contadorUpWPF++;
+    contadorDownWPF = 0;
 
-        // Un paso normal
-        bajar();
+    // ==========================================
+    // USAR CONFIGURACIÓN DEL LAB
+    // ==========================================
 
-        // Paso adicional cada 5 clics
-        if (contadorUpWPF % 5 == 0)
-        {
-            delay(20);
+    // false = ejecutar secuencia tal como
+    // fue configurada desde WPF
+    ejecutarCuadratura(false);
 
-            bajar();
+    pasoActual++;
 
-            Serial.println("EXTRA UP");
-        }
+    // Esperar estabilización
+    delay(500);
 
-        Serial.print("OK UP #");
-        Serial.println(contadorUpWPF);
-    }
+    Serial.print("OK UP #");
+    Serial.println(contadorUpWPF);
+
+    mostrarPasoFan();
+}
 
 
     // =====================================================
@@ -329,27 +546,31 @@ void procesarSerial()
     // =====================================================
 
     else if (comando == "DOWN")
+{
+    contadorDownWPF++;
+    contadorUpWPF = 0;
+
+    // ==========================================
+    // USAR CONFIGURACIÓN DEL LAB
+    // ==========================================
+
+    // true = ejecutar la misma secuencia
+    // configurada desde WPF, pero al revés
+    ejecutarCuadratura(true);
+
+    if (pasoActual > 0)
     {
-        contadorDownWPF++;
-        contadorUpWPF = 0;
-
-        // Un paso normal
-        subir();
-
-        // Paso adicional cada 5 clics
-        if (contadorDownWPF % 5 == 0)
-        {
-            delay(20);
-
-            subir();
-
-            Serial.println("EXTRA DOWN");
-        }
-
-        Serial.print("OK DOWN #");
-        Serial.println(contadorDownWPF);
+        pasoActual--;
     }
 
+    // Esperar estabilización
+    delay(500);
+
+    Serial.print("OK DOWN #");
+    Serial.println(contadorDownWPF);
+
+    mostrarPasoFan();
+}
 
     // =====================================================
     // POWER
@@ -368,11 +589,107 @@ void procesarSerial()
     // =====================================================
 
     else if (comando == "STATUS")
+{
+    enviarEstadoEncoder();
+
+    mostrarPasoFan();
+}
+
+else if (comando.startsWith("QTIME:"))
+{
+    int valor =
+        comando.substring(6).toInt();
+
+    if (valor >= 1 &&
+        valor <= 1000)
     {
-        enviarEstadoEncoder();
+        tiempoCuadratura = valor;
+
+        Serial.print("QTIME_OK:");
+        Serial.println(tiempoCuadratura);
     }
+    else
+    {
+        Serial.println("QTIME_ERROR");
+    }
+}
+else if (comando.startsWith("CYCLES:"))
+{
+    int valor =
+        comando.substring(7).toInt();
+
+    if (valor >= 1 &&
+        valor <= 20)
+    {
+        ciclosCuadratura = valor;
+
+        Serial.print("CYCLES_OK:");
+        Serial.println(ciclosCuadratura);
+    }
+    else
+    {
+        Serial.println("CYCLES_ERROR");
+    }
+}
+else if (comando.startsWith("QSEQ:"))
+{
+    String texto =
+        comando.substring(5);
 
 
+    if (cargarSecuenciaCuadratura(texto))
+    {
+        Serial.print("QSEQ_OK:");
+
+        for (int i = 0;
+             i < cantidadEstadosQ;
+             i++)
+        {
+            Serial.print(
+                secuenciaCuadratura[i][0]);
+
+            Serial.print(
+                secuenciaCuadratura[i][1]);
+
+            if (i <
+                cantidadEstadosQ - 1)
+            {
+                Serial.print(",");
+            }
+        }
+
+        Serial.println();
+    }
+    else
+    {
+        Serial.println("QSEQ_ERROR");
+    }
+}
+else if (comando == "QSAVE")
+{
+    guardarConfiguracionCuadratura();
+}
+
+else if (comando == "TESTUP")
+{
+    ejecutarCuadratura(false);
+
+    delay(500);
+
+    Serial.println("TESTUP_OK");
+
+    mostrarPasoFan();
+}
+else if (comando == "TESTDOWN")
+{
+    ejecutarCuadratura(true);
+
+    delay(500);
+
+    Serial.println("TESTDOWN_OK");
+
+    mostrarPasoFan();
+}
     // =====================================================
     // COMANDO DESCONOCIDO
     // =====================================================
@@ -383,7 +700,36 @@ void procesarSerial()
     }
 }
 
-
+void ejecutarCuadratura(bool invertir)
+{
+    for (int ciclo = 0;
+         ciclo < ciclosCuadratura;
+         ciclo++)
+    {
+        if (!invertir)
+        {
+            for (int i = 0;
+                 i < cantidadEstadosQ;
+                 i++)
+            {
+                estadoLaboratorio(
+                    secuenciaCuadratura[i][0],
+                    secuenciaCuadratura[i][1]);
+            }
+        }
+        else
+        {
+            for (int i = cantidadEstadosQ - 1;
+                 i >= 0;
+                 i--)
+            {
+                estadoLaboratorio(
+                    secuenciaCuadratura[i][0],
+                    secuenciaCuadratura[i][1]);
+            }
+        }
+    }
+}
 // =====================================================
 // SETUP
 // =====================================================
@@ -393,7 +739,7 @@ void setup()
     Serial.begin(115200);
 
 
-    // =================================================
+    // =======================================  ==========
     // SALIDAS TRANSISTORES
     // =================================================
 
@@ -454,6 +800,43 @@ digitalWrite(RELE_POWER, HIGH);
     enviarEstadoEncoder();
 
     enviarDatosFan();
+    // =====================================================
+// =====================================================
+// CONFIGURACIÓN DE CUADRATURA POR DEFECTO
+// =====================================================
+
+tiempoCuadratura = 10;
+ciclosCuadratura = 1;
+cantidadEstadosQ = 5;
+
+secuenciaCuadratura[0][0] = 0;
+secuenciaCuadratura[0][1] = 0;
+
+secuenciaCuadratura[1][0] = 0;
+secuenciaCuadratura[1][1] = 1;
+
+secuenciaCuadratura[2][0] = 1;
+secuenciaCuadratura[2][1] = 1;
+
+secuenciaCuadratura[3][0] = 1;
+secuenciaCuadratura[3][1] = 0;
+
+secuenciaCuadratura[4][0] = 0;
+secuenciaCuadratura[4][1] = 0;
+
+
+// =====================================================
+// INTENTAR CARGAR CONFIGURACIÓN GUARDADA
+// =====================================================
+
+if (cargarConfiguracionGuardada())
+{
+    Serial.println("CONFIG CUADRATURA: GUARDADA");
+}
+else
+{
+    Serial.println("CONFIG CUADRATURA: DEFAULT");
+}
 }
 
 
