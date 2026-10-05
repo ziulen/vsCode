@@ -80,7 +80,7 @@ int contadorDownWPF = 0;
 // =====================================================
 
 const int PASO_MINIMO = 0;
-const int PASO_MAXIMO = 20;
+const int PASO_MAXIMO = 21;
 
 int pasoActual = 0;
 // =====================================================
@@ -508,22 +508,18 @@ void procesarSerial()
     // = 24 ciclos eléctricos
     // =====================================================
 
-    if (comando == "UP")
+   if (comando == "UP")
 {
     contadorUpWPF++;
     contadorDownWPF = 0;
 
-    // ==========================================
-    // USAR CONFIGURACIÓN DEL LAB
-    // ==========================================
-
-    // false = ejecutar secuencia tal como
-    // fue configurada desde WPF
     ejecutarCuadratura(false);
 
-    pasoActual++;
+    if (pasoActual < PASO_MAXIMO)
+    {
+        pasoActual++;
+    }
 
-    // Esperar estabilización
     delay(500);
 
     Serial.print("OK UP #");
@@ -544,21 +540,14 @@ void procesarSerial()
     // + 4 ciclos extra
     // = 24 ciclos eléctricos
     // =====================================================
-
-    else if (comando == "DOWN")
+else if (comando == "DOWN")
 {
     contadorDownWPF++;
     contadorUpWPF = 0;
 
-    // ==========================================
-    // USAR CONFIGURACIÓN DEL LAB
-    // ==========================================
-
-    // true = ejecutar la misma secuencia
-    // configurada desde WPF, pero al revés
     ejecutarCuadratura(true);
 
-    if (pasoActual > 0)
+    if (pasoActual > PASO_MINIMO)
     {
         pasoActual--;
     }
@@ -572,17 +561,87 @@ void procesarSerial()
     mostrarPasoFan();
 }
 
-    // =====================================================
-    // POWER
-    // =====================================================
 
-    else if (comando == "POWER")
+// =====================================================
+// TURBO
+// 21 CLICKS HACIA ARRIBA
+// =====================================================
+
+else if (comando == "TURBO")
+{
+    Serial.println("TURBO:INICIO");
+
+    contadorUpWPF = 0;
+    contadorDownWPF = 0;
+
+    for (int i = 0; i < 21; i++)
     {
-        pulsarPower();
+        // Exactamente la misma dirección que UP
+        ejecutarCuadratura(false);
 
-        Serial.println("OK POWER");
+        if (pasoActual < PASO_MAXIMO)
+        {
+            pasoActual++;
+        }
+
+        // Separación entre clicks
+        delay(100);
     }
 
+    // Consideramos que quedó en el límite superior
+    pasoActual = PASO_MAXIMO;
+
+    Serial.println("OK TURBO");
+
+    mostrarPasoFan();
+}
+
+
+// =====================================================
+// MINIMO
+// 21 CLICKS HACIA ABAJO
+// =====================================================
+
+else if (comando == "MINIMO")
+{
+    Serial.println("MINIMO:INICIO");
+
+    contadorUpWPF = 0;
+    contadorDownWPF = 0;
+
+    for (int i = 0; i < 21; i++)
+    {
+        // Exactamente la misma dirección que DOWN
+        ejecutarCuadratura(true);
+
+        if (pasoActual > PASO_MINIMO)
+        {
+            pasoActual--;
+        }
+
+        // Separación entre clicks
+        delay(100);
+    }
+
+    // Consideramos que quedó en el límite inferior
+    pasoActual = PASO_MINIMO;
+
+    Serial.println("OK MINIMO");
+
+    mostrarPasoFan();
+}
+
+
+// =====================================================
+// POWER
+// =====================================================
+
+else if (comando == "POWER")
+{
+    pulsarPower();
+
+    Serial.println("OK POWER");
+}
 
     // =====================================================
     // STATUS
@@ -828,7 +887,6 @@ secuenciaCuadratura[4][1] = 0;
 // =====================================================
 // INTENTAR CARGAR CONFIGURACIÓN GUARDADA
 // =====================================================
-
 if (cargarConfiguracionGuardada())
 {
     Serial.println("CONFIG CUADRATURA: GUARDADA");
@@ -837,6 +895,21 @@ else
 {
     Serial.println("CONFIG CUADRATURA: DEFAULT");
 }
+
+
+// =====================================================
+// AL INICIAR ESP32, PULSAR POWER AUTOMÁTICAMENTE
+// =====================================================
+
+Serial.println("INICIO: ENVIANDO POWER");
+
+delay(1000);
+
+// Simula pulsación del botón ON/OFF durante 3 segundos
+pulsarPower();
+
+Serial.println("INICIO: POWER COMPLETADO");
+
 }
 
 
